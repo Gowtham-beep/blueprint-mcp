@@ -10,21 +10,40 @@ def run(email, args):
         env["BLUEPRINT_USER_EMAIL"] = email
     p = subprocess.Popen(
         [sys.executable, "-m", "blueprint_mcp.server"],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=None, text=True, bufsize=1, env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=None,
+        text=True,
+        bufsize=1,
+        env=env,
     )
 
     def send(m):
         p.stdin.write(json.dumps(m) + "\n")
         p.stdin.flush()
 
-    send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-        "protocolVersion": "2025-06-18", "capabilities": {},
-        "clientInfo": {"name": "x", "version": "0"}}})
+    send(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "x", "version": "0"},
+            },
+        }
+    )
     p.stdout.readline()
     send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-    send({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-          "params": {"name": "search_documents", "arguments": args}})
+    send(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "search_documents", "arguments": args},
+        }
+    )
     out = json.loads(p.stdout.readline())
     p.stdin.close()
     p.wait(timeout=5)

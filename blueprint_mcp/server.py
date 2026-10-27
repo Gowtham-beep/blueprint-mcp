@@ -3,7 +3,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from uuid import UUID
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
@@ -12,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from blueprint_mcp.access import DocumentNotFound, load_visible_document
 from blueprint_mcp.principal import resolve_principal
 
 DATABASE_URL = os.environ.get(
@@ -49,7 +49,6 @@ class DocumentHit(BaseModel):
 class RevisionInfo(BaseModel):
     rev: str
     status: str
-    file_path: str
     created_at: datetime
     approved_at: datetime | None = None
     approved_by: str | None = None
@@ -144,78 +143,31 @@ async def search_documents(
     )
 
 
-DOCUMENT_METADATA_SQL = text("""
-    SELECT d.id, d.title, d.kind, d.project_id, p.name AS project_name
-    FROM documents d
-    JOIN projects p ON p.id = d.project_id AND p.tenant_id = d.tenant_id
-    WHERE d.tenant_id = :tenant_id
-      AND d.id = :document_id
-""")
-
-DOCUMENT_REVISIONS_SQL = text("""
-    SELECT r.rev, r.status, r.file_path, r.created_at, r.approved_at, r.approved_by
-    FROM revisions r
-    WHERE r.tenant_id = :tenant_id
-      AND r.document_id = :document_id
-      AND r.status = ANY(:statuses)
-    ORDER BY r.created_at DESC
-""")
-
-
 @mcp.tool()
 async def get_document_metadata(
     document_id: str,
     ctx: Context,
 ) -> DocumentMetadata:
     """Get detailed metadata for an engineering document including all visible revisions."""
-    try:
-        doc_uuid = UUID(document_id.strip())
-    except (ValueError, AttributeError):
-        raise ToolError(f"Document not found: {document_id}")
-
     engine = ctx.request_context.lifespan_context.engine
     principal = await resolve_principal(engine)
 
     async with engine.connect() as conn:
-        doc = (
-            await conn.execute(
-                DOCUMENT_METADATA_SQL,
-                {"tenant_id": principal.tenant_id, "document_id": doc_uuid},
-            )
-        ).first()
-
-        if doc is None:
-            raise ToolError(f"Document not found: {document_id}")
-
-        rev_rows = (
-            await conn.execute(
-                DOCUMENT_REVISIONS_SQL,
-                {
-                    "tenant_id": principal.tenant_id,
-                    "document_id": doc_uuid,
-                    "statuses": principal.visible_statuses(),
-                },
-            )
-        ).all()
-
-        if not rev_rows:
-            # If no revisions are visible to this principal (e.g. a viewer querying
-            # a document with only draft revisions), treat as not found to avoid
-            # leaking the existence of unreleased documents.
-            raise ToolError(f"Document not found: {document_id}")
+        try:
+            doc = await load_visible_document(conn, principal, document_id)
+        except DocumentNotFound:
+            raise ToolError("Document not found") from None
 
     revisions = [
         RevisionInfo(
             rev=r.rev,
             status=r.status,
-            file_path=r.file_path,
             created_at=r.created_at,
             approved_at=r.approved_at,
             approved_by=str(r.approved_by) if r.approved_by else None,
         )
-        for r in rev_rows
+        for r in doc.revisions
     ]
-
     return DocumentMetadata(
         document_id=str(doc.id),
         title=doc.title,

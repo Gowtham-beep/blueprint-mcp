@@ -9,19 +9,21 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 class AuthError(Exception):
     pass
 
+
 @dataclass(frozen=True)
 class Principal:
-    user_id:UUID
-    tenant_id:UUID
-    role:str
+    user_id: UUID
+    tenant_id: UUID
+    role: str
 
-    def visible_statuses(self)->list[str]:
+    def visible_statuses(self) -> list[str]:
         if self.role == "viewer":
             return ["approved"]
-        return ["draft", "in_review","approved","superseded"]
+        return ["draft", "in_review", "approved", "superseded"]
 
-async def resolve_principal(engine:AsyncEngine)->Principal:
-    email= os.environ.get("BLUEPRINT_USER_EMAIL")
+
+async def resolve_principal(engine: AsyncEngine) -> Principal:
+    email = os.environ.get("BLUEPRINT_USER_EMAIL")
     if not email:
         raise AuthError("not Authenticated")
     async with engine.connect() as conn:
