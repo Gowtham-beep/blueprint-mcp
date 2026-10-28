@@ -6,13 +6,14 @@ from datetime import datetime
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
-from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ResourceNotFoundError, ToolError
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from blueprint_mcp.access import DocumentNotFound, load_visible_document
 from blueprint_mcp.principal import resolve_principal
+from blueprint_mcp.storage import StorageError, resolve_storage_path
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -48,6 +49,7 @@ class DocumentHit(BaseModel):
 
 class RevisionInfo(BaseModel):
     rev: str
+    uri: str
     status: str
     created_at: datetime
     approved_at: datetime | None = None
@@ -161,6 +163,7 @@ async def get_document_metadata(
     revisions = [
         RevisionInfo(
             rev=r.rev,
+            uri=f"blueprint://documents/{doc.id}/revisions/{r.rev}",
             status=r.status,
             created_at=r.created_at,
             approved_at=r.approved_at,
@@ -178,6 +181,31 @@ async def get_document_metadata(
         latest_status=revisions[0].status,
         revisions=revisions,
     )
+
+
+@mcp.resource(
+    "blueprint://documents/{document_id}/revisions/{rev}",
+    name="revision_file",
+    description="Get the file path for a specific revision of a document.",
+    mime_type="application/pdf",
+)
+async def read_revision_file(document_id: str, rev: str, ctx: Context) -> bytes:
+    engine = ctx.request_context.lifespan_context.engine
+    principal = await resolve_principal(engine)
+
+    async with engine.connect() as conn:
+        try:
+            doc = await load_visible_document(conn, principal, document_id)
+        except DocumentNotFound:
+            raise ResourceNotFoundError("Document not found") from None
+
+    match = next((r for r in doc.revisions if r.rev == rev), None)
+    if match is None:
+        raise ResourceNotFoundError("Revision not found")
+    try:
+        return resolve_storage_path(match.file_path).read_bytes()
+    except StorageError:
+        raise ResourceNotFoundError("Resource not found") from None
 
 
 if __name__ == "__main__":

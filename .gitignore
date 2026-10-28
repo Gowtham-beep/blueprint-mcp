@@ -25,6 +25,9 @@ dist/
 .env.*
 !.env.example
 
+# Local storage
+storage/
+
 # Editor and OS files
 .idea/
 .vscode/
