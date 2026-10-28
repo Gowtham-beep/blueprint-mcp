@@ -10,11 +10,6 @@ pytestmark = pytest.mark.anyio
 
 
 @pytest.fixture
-def anyio_backend():
-    return "asyncio"
-
-
-@pytest.fixture
 async def conn():
     engine = create_async_engine(DATABASE_URL)
     async with engine.connect() as c:

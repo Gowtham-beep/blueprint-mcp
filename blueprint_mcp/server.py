@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from blueprint_mcp import prompts
 from blueprint_mcp.access import DocumentNotFound, load_visible_document
 from blueprint_mcp.principal import resolve_principal
 from blueprint_mcp.storage import StorageError, resolve_storage_path
@@ -36,6 +37,7 @@ async def lifespan(server: MCPServer) -> AsyncIterator[AppState]:
 
 
 mcp = MCPServer("blueprint-mcp", lifespan=lifespan)
+prompts.register(mcp)
 
 
 class DocumentHit(BaseModel):
