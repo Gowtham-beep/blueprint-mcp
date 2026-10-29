@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from blueprint_mcp import prompts
 from blueprint_mcp.access import (
     DocumentNotFound,
     ProjectNotFound,
@@ -18,6 +19,8 @@ from blueprint_mcp.access import (
     load_visible_document,
 )
 from blueprint_mcp.compare import diff_revisions, elapsed_days
+from blueprint_mcp.principal import resolve_principal
+from blueprint_mcp.storage import StorageError, resolve_storage_path
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -221,6 +224,7 @@ async def get_document_metadata(
         revisions=revisions,
     )
 
+
 @mcp.tool()
 async def get_latest_approved_drawings(
     project_id: str, ctx: Context
@@ -298,8 +302,6 @@ async def check_document_access(document_id: str, ctx: Context) -> AccessResult:
     return AccessResult(
         document_id=document_id.strip(), allowed=allowed, role=principal.role
     )
-
-
 
 
 @mcp.resource(

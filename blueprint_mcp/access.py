@@ -11,8 +11,10 @@ from blueprint_mcp.principal import Principal
 class DocumentNotFound(Exception):
     """Missing, other-tenant and not-visible documents all look the same."""
 
+
 class ProjectNotFound(Exception):
     """Missing and other-tenant projects look the same."""
+
 
 @dataclass(frozen=True)
 class RevisionRow:
@@ -85,8 +87,6 @@ async def load_visible_document(
     )
 
 
-
-
 @dataclass(frozen=True)
 class ApprovedDrawing:
     id: UUID
@@ -136,5 +136,6 @@ async def latest_approved_drawings(
         )
     ).all()
     return [
-        ApprovedDrawing(r.id, r.title, r.rev, r.approved_at, r.approved_by) for r in rows
+        ApprovedDrawing(r.id, r.title, r.rev, r.approved_at, r.approved_by)
+        for r in rows
     ]

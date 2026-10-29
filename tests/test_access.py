@@ -21,10 +21,14 @@ async def test_viewer_sees_only_approved(conn):
 async def test_viewer_cannot_see_draft_only_document(conn):
     vik = await principal_for(conn, "vik@acme.test")
     with pytest.raises(DocumentNotFound):
-        await load_visible_document(conn, vik, await make_draft_only_doc(conn, "Acme Steel"))
+        await load_visible_document(
+            conn, vik, await make_draft_only_doc(conn, "Acme Steel")
+        )
 
 
-@pytest.mark.parametrize("bad_id", ["not-a-uuid", "", "00000000-0000-0000-0000-000000000000"])
+@pytest.mark.parametrize(
+    "bad_id", ["not-a-uuid", "", "00000000-0000-0000-0000-000000000000"]
+)
 async def test_bad_ids_are_not_found(conn, bad_id):
     alice = await principal_for(conn, "alice@acme.test")
     with pytest.raises(DocumentNotFound):
