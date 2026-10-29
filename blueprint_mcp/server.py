@@ -11,10 +11,13 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from blueprint_mcp import prompts
-from blueprint_mcp.access import DocumentNotFound, load_visible_document
-from blueprint_mcp.principal import resolve_principal
-from blueprint_mcp.storage import StorageError, resolve_storage_path
+from blueprint_mcp.access import (
+    DocumentNotFound,
+    ProjectNotFound,
+    latest_approved_drawings,
+    load_visible_document,
+)
+from blueprint_mcp.compare import diff_revisions, elapsed_days
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -74,6 +77,40 @@ class SearchResult(BaseModel):
     limit: int
     offset: int
     has_more: bool
+
+
+class DrawingSummary(BaseModel):
+    document_id: str
+    title: str
+    latest_approved_rev: str
+    approved_at: datetime | None = None
+    approved_by: str | None = None
+    uri: str
+
+
+class LatestApprovedDrawings(BaseModel):
+    project_id: str
+    drawings: list[DrawingSummary]
+
+
+class FieldChange(BaseModel):
+    field: str
+    from_value: str | None
+    to_value: str | None
+
+
+class RevisionComparison(BaseModel):
+    document_id: str
+    from_rev: str
+    to_rev: str
+    changes: list[FieldChange]
+    days_between_creation: float
+
+
+class AccessResult(BaseModel):
+    document_id: str
+    allowed: bool
+    role: str
 
 
 SEARCH_SQL = text("""
@@ -183,6 +220,86 @@ async def get_document_metadata(
         latest_status=revisions[0].status,
         revisions=revisions,
     )
+
+@mcp.tool()
+async def get_latest_approved_drawings(
+    project_id: str, ctx: Context
+) -> LatestApprovedDrawings:
+    """List the latest approved revision of every drawing in a project."""
+    engine = ctx.request_context.lifespan_context.engine
+    principal = await resolve_principal(engine)
+
+    async with engine.connect() as conn:
+        try:
+            drawings = await latest_approved_drawings(conn, principal, project_id)
+        except ProjectNotFound:
+            raise ToolError("Project not found") from None
+
+    return LatestApprovedDrawings(
+        project_id=project_id.strip(),
+        drawings=[
+            DrawingSummary(
+                document_id=str(d.id),
+                title=d.title,
+                latest_approved_rev=d.rev,
+                approved_at=d.approved_at,
+                approved_by=str(d.approved_by) if d.approved_by else None,
+                uri=f"blueprint://documents/{d.id}/revisions/{d.rev}",
+            )
+            for d in drawings
+        ],
+    )
+
+
+@mcp.tool()
+async def compare_revisions(
+    document_id: str, from_rev: str, to_rev: str, ctx: Context
+) -> RevisionComparison:
+    """Compare the metadata (status and approval details) of two revisions of a document."""
+    engine = ctx.request_context.lifespan_context.engine
+    principal = await resolve_principal(engine)
+
+    async with engine.connect() as conn:
+        try:
+            doc = await load_visible_document(conn, principal, document_id)
+        except DocumentNotFound:
+            raise ToolError("Document or revision not found") from None
+
+    by_rev = {r.rev: r for r in doc.revisions}
+    before, after = by_rev.get(from_rev), by_rev.get(to_rev)
+    if before is None or after is None:
+        raise ToolError("Document or revision not found")
+
+    return RevisionComparison(
+        document_id=str(doc.id),
+        from_rev=from_rev,
+        to_rev=to_rev,
+        changes=[
+            FieldChange(field=c.field, from_value=c.from_value, to_value=c.to_value)
+            for c in diff_revisions(before, after)
+        ],
+        days_between_creation=elapsed_days(before, after),
+    )
+
+
+@mcp.tool()
+async def check_document_access(document_id: str, ctx: Context) -> AccessResult:
+    """Check whether the current user can read a document. Gives no reason when denied."""
+    engine = ctx.request_context.lifespan_context.engine
+    principal = await resolve_principal(engine)
+
+    async with engine.connect() as conn:
+        try:
+            await load_visible_document(conn, principal, document_id)
+            allowed = True
+        except DocumentNotFound:
+            allowed = False
+
+    return AccessResult(
+        document_id=document_id.strip(), allowed=allowed, role=principal.role
+    )
+
+
 
 
 @mcp.resource(
