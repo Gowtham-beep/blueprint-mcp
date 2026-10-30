@@ -22,7 +22,7 @@ VERIFY_SQL = text("""
     FROM api_tokens
     WHERE token_hash = :token_hash
       AND revoked_at IS NULL
-      AND (expires_at IS NULL OR expires_at > now())
+      
 """)
 
 
