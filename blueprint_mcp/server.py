@@ -3,6 +3,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
+import argparse
+from mcp.server.auth.settings import AuthSettings
+from blueprint_mcp.auth import DbTokenVerifier
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
@@ -19,7 +22,7 @@ from blueprint_mcp.access import (
     load_visible_document,
 )
 from blueprint_mcp.compare import diff_revisions, elapsed_days
-from blueprint_mcp.principal import resolve_principal
+from blueprint_mcp.principal import configure_identity, resolve_principal
 from blueprint_mcp.storage import StorageError, resolve_storage_path
 
 DATABASE_URL = os.environ.get(
@@ -42,9 +45,31 @@ async def lifespan(server: MCPServer) -> AsyncIterator[AppState]:
         await engine.dispose()
 
 
-mcp = MCPServer("blueprint-mcp", lifespan=lifespan)
-prompts.register(mcp)
 
+engine = create_async_engine(DATABASE_URL, pool_size=5)  # connects lazily
+
+
+@asynccontextmanager
+async def lifespan(server: MCPServer) -> AsyncIterator[AppState]:
+    try:
+        yield AppState(engine=engine)
+    finally:
+        await engine.dispose()
+
+
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "http://127.0.0.1:8000")
+
+mcp = MCPServer(
+    "blueprint-mcp",
+    lifespan=lifespan,
+    token_verifier=DbTokenVerifier(engine, resource=PUBLIC_URL),
+    auth=AuthSettings(
+        issuer_url=PUBLIC_URL,
+        resource_server_url=PUBLIC_URL,
+        validate_token_resource=True,
+    ),
+)
+prompts.register(mcp)
 
 class DocumentHit(BaseModel):
     document_id: str
@@ -329,5 +354,26 @@ async def read_revision_file(document_id: str, rev: str, ctx: Context) -> bytes:
         raise ResourceNotFoundError("Resource not found") from None
 
 
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--transport", choices=["stdio", "http"], default="stdio")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8000)
+    args = parser.parse_args()
+
+    if args.transport == "stdio":
+        configure_identity("env")  # local dev: identity from BLUEPRINT_USER_EMAIL
+        mcp.run(transport="stdio")
+    else:
+        configure_identity("token")  # network: identity only from a verified token
+        mcp.run(
+            transport="streamable-http",
+            host=args.host,
+            port=args.port,
+            json_response=True,
+            stateless_http=True,
+        )
+
+
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    main()
