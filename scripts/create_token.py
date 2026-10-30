@@ -1,4 +1,5 @@
 """Issue an API token for a user. The token is printed ONCE; only its hash is stored."""
+
 import asyncio
 import sys
 

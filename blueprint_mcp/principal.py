@@ -51,7 +51,8 @@ async def resolve_principal(engine: AsyncEngine) -> Principal:
     async with engine.connect() as conn:
         row = (
             await conn.execute(
-                text(f"SELECT id, tenant_id, role FROM users WHERE {where}"), {"v": value}
+                text(f"SELECT id, tenant_id, role FROM users WHERE {where}"),
+                {"v": value},
             )
         ).first()
     if row is None:

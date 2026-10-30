@@ -1,13 +1,12 @@
+import argparse
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-import argparse
-from mcp.server.auth.settings import AuthSettings
-from blueprint_mcp.auth import DbTokenVerifier
 
 from mcp.server import MCPServer
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ResourceNotFoundError, ToolError
 from pydantic import BaseModel
@@ -21,6 +20,7 @@ from blueprint_mcp.access import (
     latest_approved_drawings,
     load_visible_document,
 )
+from blueprint_mcp.auth import DbTokenVerifier
 from blueprint_mcp.compare import diff_revisions, elapsed_days
 from blueprint_mcp.principal import configure_identity, resolve_principal
 from blueprint_mcp.storage import StorageError, resolve_storage_path
@@ -34,16 +34,6 @@ DATABASE_URL = os.environ.get(
 @dataclass
 class AppState:
     engine: AsyncEngine
-
-
-@asynccontextmanager
-async def lifespan(server: MCPServer) -> AsyncIterator[AppState]:
-    engine = create_async_engine(DATABASE_URL, pool_size=5)
-    try:
-        yield AppState(engine=engine)
-    finally:
-        await engine.dispose()
-
 
 
 engine = create_async_engine(DATABASE_URL, pool_size=5)  # connects lazily
@@ -70,6 +60,7 @@ mcp = MCPServer(
     ),
 )
 prompts.register(mcp)
+
 
 class DocumentHit(BaseModel):
     document_id: str
