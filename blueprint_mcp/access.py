@@ -45,7 +45,7 @@ LOAD_SQL = text("""
     WHERE d.tenant_id = :tenant_id
       AND d.id = :document_id
       AND r.status = ANY(:statuses)
-    ORDER BY r.created_at DESC
+    ORDER BY r.created_at DESC, r.rev DESC
 """)
 
 

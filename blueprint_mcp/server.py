@@ -141,7 +141,7 @@ SEARCH_SQL = text("""
         WHERE r.tenant_id = d.tenant_id
           AND r.document_id = d.id
           AND r.status = ANY(:statuses)
-        ORDER BY r.created_at DESC
+        ORDER BY r.created_at DESC, r.rev DESC
         LIMIT 1
     ) lr ON true
     WHERE d.tenant_id = :tenant_id
