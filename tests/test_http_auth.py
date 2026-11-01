@@ -191,3 +191,59 @@ def test_foreign_origin_is_rejected(server_url, issue, acme_doc):
 def test_foreign_host_header_is_rejected(server_url, issue, acme_doc):
     token = issue("alice@acme.test")
     assert call_metadata(server_url, token, acme_doc, {"Host": "evil.example"}) == ("http", 421)
+
+
+    # ---- the audit log: the client sees generic errors, the log keeps the real reason ----
+
+def audit_rows(token_ref: str):
+    return db(
+        """SELECT event, outcome, reason, tenant_id::text, user_id::text, tool, target
+           FROM audit_log WHERE token_ref = :r ORDER BY id""",
+        r=token_ref,
+    )
+
+
+def test_denied_tokens_are_logged_with_exact_reason(server_url, issue, acme_doc):
+    garbage = "bpk_not_a_real_token_for_audit"
+    assert call_metadata(server_url, garbage, acme_doc) == ("http", 401)
+    assert audit_rows(hash_token(garbage)[:12])[0][:3] == ("auth", "deny", "unknown_token")
+
+    revoked = issue("alice@acme.test")
+    db("UPDATE api_tokens SET revoked_at = now() WHERE token_hash = :h", h=hash_token(revoked))
+    assert call_metadata(server_url, revoked, acme_doc) == ("http", 401)
+    assert audit_rows(hash_token(revoked)[:12])[0][2] == "revoked_token"
+
+    expired = issue("alice@acme.test", expires_sql="now() - interval '1 second'")
+    assert call_metadata(server_url, expired, acme_doc) == ("http", 401)
+    assert audit_rows(hash_token(expired)[:12])[0][2] == "expired_token"
+
+
+def test_cross_tenant_denial_is_logged_with_actor_and_target(server_url, issue, acme_doc):
+    token = issue("bob@birla.test")
+    kind, message = call_metadata(server_url, token, acme_doc)
+    assert kind == "error" and message.endswith("Document not found")  # nothing more is revealed
+    bob = db("SELECT tenant_id::text, id::text FROM users WHERE email = 'bob@birla.test'")[0]
+    deny = [r for r in audit_rows(hash_token(token)[:12]) if r[1] == "deny"]
+    assert deny == [("tool_call", "deny", "document_not_visible",
+                     bob[0], bob[1], "get_document_metadata", acme_doc)]
+
+
+def test_allowed_call_is_logged(server_url, issue, acme_doc):
+    token = issue("alice@acme.test")
+    assert call_metadata(server_url, token, acme_doc)[0] == "revs"
+    rows = audit_rows(hash_token(token)[:12])
+    assert [(r[1], r[2], r[5]) for r in rows] == [("allow", "ok", "get_document_metadata")]
+
+
+def test_audit_log_never_contains_secrets_or_raw_input(server_url, issue, acme_doc):
+    token = issue("alice@acme.test")
+    start = db("SELECT coalesce(max(id), 0) FROM audit_log")[0][0]  # only judge rows written now
+    hostile = "'; DROP TABLE users; --"
+    assert call_metadata(server_url, token, hostile)[0] == "error"
+    assert audit_rows(hash_token(token)[:12])[0][6] == "invalid-id"
+    for secret in (token, hash_token(token), hostile):
+        count = db(
+            "SELECT count(*) FROM audit_log WHERE id > :s AND audit_log::text LIKE :p",
+            s=start, p=f"%{secret}%",
+        )
+        assert count[0][0] == 0

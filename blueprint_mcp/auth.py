@@ -5,6 +5,8 @@ from mcp.server.auth.provider import AccessToken
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from blueprint_mcp import audit
+
 TOKEN_PREFIX = "bpk_"
 
 
@@ -22,9 +24,12 @@ VERIFY_SQL = text("""
     FROM api_tokens
     WHERE token_hash = :token_hash
       AND revoked_at IS NULL
-      
+      AND (expires_at IS NULL OR expires_at > now())
 """)
-
+WHY_SQL = text("""
+    SELECT revoked_at IS NOT NULL AS revoked, expires_at <= now() AS expired
+    FROM api_tokens WHERE token_hash = :token_hash
+""")
 
 class DbTokenVerifier:
     """Runs on every HTTP request, before any tool code."""
@@ -38,6 +43,7 @@ class DbTokenVerifier:
         async with self._engine.connect() as conn:
             row = (await conn.execute(VERIFY_SQL, {"token_hash": token_hash})).first()
         if row is None:
+            await self._audit_denied(token_hash)
             return None
         return AccessToken(
             token=token_hash[:12],  # never keep the raw token around
@@ -46,4 +52,19 @@ class DbTokenVerifier:
             expires_at=int(row.expires_at.timestamp()) if row.expires_at else None,
             resource=self._resource,
             subject=str(row.user_id),
+        )
+    
+
+    async def _audit_denied(self, token_hash: str) -> None:
+        """The client only ever sees 401; the log records WHY (the only place that is known)."""
+        async with self._engine.connect() as conn:
+            why = (await conn.execute(WHY_SQL, {"token_hash": token_hash})).first()
+        if why is None:
+            reason = "unknown_token"
+        elif why.revoked:
+            reason = "revoked_token"
+        else:
+            reason = "expired_token"
+        await audit.record(
+            self._engine, event="auth", outcome="deny", reason=reason, token_ref=token_hash[:12]
         )

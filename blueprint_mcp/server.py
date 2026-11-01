@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from blueprint_mcp import prompts
+from blueprint_mcp import audit, prompts
 from blueprint_mcp.access import (
     DocumentNotFound,
     ProjectNotFound,
@@ -216,7 +216,26 @@ async def get_document_metadata(
         try:
             doc = await load_visible_document(conn, principal, document_id)
         except DocumentNotFound:
+            await audit.record(
+                engine,
+                event="tool_call",
+                outcome="deny",
+                reason="document_not_visible",
+                principal=principal,
+                tool="get_document_metadata",
+                target=document_id,
+            )
             raise ToolError("Document not found") from None
+
+    await audit.record(
+        engine,
+        event="tool_call",
+        outcome="allow",
+        reason="ok",
+        principal=principal,
+        tool="get_document_metadata",
+        target=document_id,
+    )
 
     revisions = [
         RevisionInfo(
@@ -253,7 +272,26 @@ async def get_latest_approved_drawings(
         try:
             drawings = await latest_approved_drawings(conn, principal, project_id)
         except ProjectNotFound:
+            await audit.record(
+                engine,
+                event="tool_call",
+                outcome="deny",
+                reason="project_not_visible",
+                principal=principal,
+                tool="get_latest_approved_drawings",
+                target=project_id,
+            )
             raise ToolError("Project not found") from None
+
+    await audit.record(
+        engine,
+        event="tool_call",
+        outcome="allow",
+        reason="ok",
+        principal=principal,
+        tool="get_latest_approved_drawings",
+        target=project_id,
+    )
 
     return LatestApprovedDrawings(
         project_id=project_id.strip(),
@@ -283,12 +321,40 @@ async def compare_revisions(
         try:
             doc = await load_visible_document(conn, principal, document_id)
         except DocumentNotFound:
+            await audit.record(
+                engine,
+                event="tool_call",
+                outcome="deny",
+                reason="document_not_visible",
+                principal=principal,
+                tool="compare_revisions",
+                target=document_id,
+            )
             raise ToolError("Document or revision not found") from None
 
     by_rev = {r.rev: r for r in doc.revisions}
     before, after = by_rev.get(from_rev), by_rev.get(to_rev)
     if before is None or after is None:
+        await audit.record(
+            engine,
+            event="tool_call",
+            outcome="deny",
+            reason="revision_not_visible",
+            principal=principal,
+            tool="compare_revisions",
+            target=document_id,
+        )
         raise ToolError("Document or revision not found")
+
+    await audit.record(
+        engine,
+        event="tool_call",
+        outcome="allow",
+        reason="ok",
+        principal=principal,
+        tool="compare_revisions",
+        target=document_id,
+    )
 
     return RevisionComparison(
         document_id=str(doc.id),
@@ -313,7 +379,27 @@ async def check_document_access(document_id: str, ctx: Context) -> AccessResult:
             await load_visible_document(conn, principal, document_id)
             allowed = True
         except DocumentNotFound:
+            await audit.record(
+                engine,
+                event="tool_call",
+                outcome="deny",
+                reason="document_not_visible",
+                principal=principal,
+                tool="check_document_access",
+                target=document_id,
+            )
             allowed = False
+
+    if allowed:
+        await audit.record(
+            engine,
+            event="tool_call",
+            outcome="allow",
+            reason="ok",
+            principal=principal,
+            tool="check_document_access",
+            target=document_id,
+        )
 
     return AccessResult(
         document_id=document_id.strip(), allowed=allowed, role=principal.role
@@ -334,15 +420,44 @@ async def read_revision_file(document_id: str, rev: str, ctx: Context) -> bytes:
         try:
             doc = await load_visible_document(conn, principal, document_id)
         except DocumentNotFound:
+            await audit.record(
+                engine,
+                event="tool_call",
+                outcome="deny",
+                reason="document_not_visible",
+                principal=principal,
+                tool="read_revision_file",
+                target=document_id,
+            )
             raise ResourceNotFoundError("Document not found") from None
 
     match = next((r for r in doc.revisions if r.rev == rev), None)
     if match is None:
+        await audit.record(
+            engine,
+            event="tool_call",
+            outcome="deny",
+            reason="revision_not_visible",
+            principal=principal,
+            tool="read_revision_file",
+            target=document_id,
+        )
         raise ResourceNotFoundError("Revision not found")
     try:
-        return resolve_storage_path(match.file_path).read_bytes()
+        data = resolve_storage_path(match.file_path).read_bytes()
     except StorageError:
         raise ResourceNotFoundError("Resource not found") from None
+
+    await audit.record(
+        engine,
+        event="tool_call",
+        outcome="allow",
+        reason="ok",
+        principal=principal,
+        tool="read_revision_file",
+        target=document_id,
+    )
+    return data
 
 
 def main() -> None:
