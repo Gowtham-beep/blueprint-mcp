@@ -247,3 +247,40 @@ def test_audit_log_never_contains_secrets_or_raw_input(server_url, issue, acme_d
             s=start, p=f"%{secret}%",
         )
         assert count[0][0] == 0
+
+
+@pytest.mark.parametrize(
+    ("tool", "target_key", "extra_args"),
+    [
+        ("get_document_metadata", "document_id", {}),
+        ("compare_revisions", "document_id", {"from_rev": "A", "to_rev": "B"}),
+        ("check_document_access", "document_id", {}),
+        ("get_latest_approved_drawings", "project_id", {}),
+    ],
+)
+def test_cross_tenant_tools_denial_audit(
+    server_url, issue, acme_doc, tool, target_key, extra_args
+):
+    target = (
+        str(
+            db(
+                "SELECT p.id FROM projects p JOIN tenants t ON t.id = p.tenant_id WHERE t.name = 'Acme Steel'"
+            )[0][0]
+        )
+        if target_key == "project_id"
+        else acme_doc
+    )
+    token = issue("bob@birla.test")
+    post(server_url, INIT, token)
+    post(
+        server_url,
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": tool, "arguments": {target_key: target, **extra_args}},
+        },
+        token,
+    )
+    rows = audit_rows(hash_token(token)[:12])
+    assert [(r[1], r[5]) for r in rows] == [("deny", tool)]
